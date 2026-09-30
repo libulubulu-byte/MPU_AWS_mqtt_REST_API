@@ -1,0 +1,5 @@
+# aws_check.py 运行时从 main/aws_certs.h 抽出的临时 PEM（含设备私钥），
+# 用完即弃，绝不能提交。
+*.pem
+*.pem.crt
+*.key

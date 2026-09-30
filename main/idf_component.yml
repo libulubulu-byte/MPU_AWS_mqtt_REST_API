@@ -1,0 +1,4 @@
+# Component dependency: led_strip (onboard WS2812 LED), fetched from the
+# Espressif component registry. Keep this file ASCII-only as well.
+dependencies:
+  espressif/led_strip: "^2.4.1"

@@ -1,0 +1,298 @@
+menu "AWS IoT (SHT30) Configuration"
+
+    comment "NOTE - not everything is configured here:"
+    comment "  WiFi SSID/password  -> entered on the SoftAP web page at 192.168.4.1"
+    comment "  backend selection, REST server host/port/paths, report interval,"
+    comment "  firmware version    -> main/app_config.h (edit the macros, rebuild)"
+    comment "  AWS endpoint/Thing/certificates -> main/aws_certs.h"
+    comment "Only hardware- and build-related knobs stay in this menu."
+
+    comment "---- Provisioning SoftAP (web config page) ----"
+
+    config APP_AP_SSID_PREFIX
+        string "SoftAP SSID prefix"
+        default "ESP32S3-SHT30"
+        help
+            Provisioning hotspot name; the device MAC tail is appended,
+            e.g. ESP32S3-SHT30-A1B2C3D4E5F6. Connect to it and open
+            http://192.168.4.1 to enter the WiFi SSID and password.
+
+    config APP_AP_PASSWORD
+        string "SoftAP password (empty = open)"
+        default ""
+        help
+            At least 8 characters for WPA2; leave empty for an open hotspot.
+
+    config APP_PTT_GPIO
+        int "Re-provision button GPIO (hold 3s, active low)"
+        range 0 48
+        default 0
+        help
+            Button between this GPIO and GND (internal pull-up, pressed =
+            low). Hold 3 s to erase the WiFi config and reboot into the
+            provisioning page. GPIO0 is the on-board BOOT button.
+
+    comment "---- Topics ----"
+
+    config APP_AWS_BASE_TOPIC
+        string "Base topic for this device"
+        default "ESP32S3/esp32s3-sht30"
+        help
+            State goes to <base>/state and lamp commands are read from
+            <base>/lamp/set. Remember to allow these in the IoT policy
+            attached to the certificate, e.g.
+            "Resource": "arn:aws:iot:<region>:<account>:topic/<base>/*".
+
+            Must start with the Thing name (AWS_IOT_THING in
+            main/aws_certs.h) so that the "thing/*" policy wildcard
+            matches.
+
+    comment "---- SHT30 sensor (I2C1) ----"
+
+    config APP_SHT30_SDA_GPIO
+        int "SHT30 SDA GPIO"
+        range 0 48
+        default 12
+
+    config APP_SHT30_SCL_GPIO
+        int "SHT30 SCL GPIO"
+        range 0 48
+        default 13
+
+    comment "---- MPU6050 accelerometer (its own I2C bus, I2C_NUM_0) ----"
+
+    comment "The MPU6050 is on its OWN SDA/SCL pins (default GPIO15/16) and its"
+    comment "own I2C port, so it does not share a bus with the SHT30."
+    comment ""
+    comment "DO NOT use GPIO41/42 here. On the ESP32-S3 those two pins are the"
+    comment "USB D-/D+ lines, and the USB Serial/JTAG secondary console is"
+    comment "enabled in this project. An I2C bus wired to 41/42 works until the"
+    comment "USB side becomes active, then starts NACKing: the symptom is a"
+    comment "working sensor that drops out after a while ('SHT30 tem --' and"
+    comment "'mpu6050 --' in the status line) plus 'i2c.master: unexpected nack'"
+    comment "spam. Pick any ordinary free GPIO instead (15/16 are free here)."
+
+    config APP_MPU6050_SDA_GPIO
+        int "MPU6050 SDA GPIO"
+        range 0 48
+        default 15
+
+    config APP_MPU6050_SCL_GPIO
+        int "MPU6050 SCL GPIO"
+        range 0 48
+        default 16
+
+    config APP_MPU6050_ADDR
+        int "MPU6050 I2C address (0x68 = 104, 0x69 = 105 when AD0 is high)"
+        range 104 105
+        default 104
+
+    config APP_MPU6050_ACCEL_RANGE
+        int "MPU6050 accel full-scale range (0=+-2g 1=+-4g 2=+-8g 3=+-16g)"
+        range 0 3
+        default 0
+        help
+            +-2g gives the finest resolution, which is what the vibration
+            detector wants. Raise it only if the board sees sustained
+            accelerations above 2g (it does not, on a desk).
+
+    comment "---- DHT22 temperature / humidity ----"
+
+    config APP_DHT22_GPIO
+        int "DHT22 data GPIO"
+        range 0 48
+        default 4
+        help
+            Single-wire data pin. The 3-pin DHT22 module already carries a
+            4.7k pull-up; the driver enables the internal pull-up as well,
+            so no external resistor is needed for a module. A bare 4-pin
+            sensor DOES need an external 4.7k-10k pull-up to 3V3.
+
+    comment "---- HC-SR04 ultrasonic distance ----"
+
+    config APP_HCSR04_TRIG_GPIO
+        int "HC-SR04 TRIG GPIO"
+        range 0 48
+        default 5
+
+    config APP_HCSR04_ECHO_GPIO
+        int "HC-SR04 ECHO GPIO"
+        range 0 48
+        default 6
+        help
+            ECHO is a 5V output - level-shift it to 3.3V (e.g. 1k/2k divider)
+            before it reaches the ESP32-S3 pin, or the pin will be damaged.
+
+    config APP_HCSR04_TIMEOUT_US
+        int "HC-SR04 echo timeout (us)"
+        range 1000 100000
+        default 30000
+        help
+            Gives up after this long without an echo. 30000 us is about 5 m
+            (sound travels ~343 m/s, so ~58 us per cm and the echo pin stays
+            high for the round trip). Keep it above the round-trip time of
+            the farthest surface you care about.
+
+    comment "---- PIR motion sensor ----"
+
+    config APP_PIR_GPIO
+        int "PIR OUT GPIO"
+        range 0 48
+        default 7
+
+    config APP_PIR_HOLD_MS
+        int "PIR presence hold time (ms)"
+        range 1000 600000
+        default 30000
+        help
+            How long "presence" stays true after the last PIR edge. PIR
+            modules have their own retrigger window (typically 2-3 s) and
+            the GPIO can drop between steps, so this debounce keeps the
+            reported presence stable while someone is moving around.
+
+    config APP_PIR_LAMP_ENABLE
+        bool "Let the PIR switch the lamp on/off"
+        default y
+        help
+            A rising edge (no motion -> motion) turns the lamp on; when the
+            hold time expires the lamp goes off again. A cloud/OFF command
+            takes priority: it latches the PIR automation off until presence
+            drops, so the two writers cannot fight over the LED.
+
+    comment "---- Environmental thresholds (local alerting) ----"
+
+    config APP_ENV_TASK_ENABLE
+        bool "Enable the environmental sensor task"
+        default y
+        help
+            Master switch for the MPU6050 / DHT22 / HC-SR04 / PIR task.
+            Turning it off leaves the pins untouched and keeps only the
+            original SHT30 reporting path.
+
+    config APP_ENV_SAMPLE_MS
+        int "Sensor task tick (ms)"
+        range 20 1000
+        default 50
+        help
+            Base tick of the single collection task. The MPU6050 is polled
+            every tick, the PIR every 2 ticks, the HC-SR04 every 10 ticks
+            and the DHT22 every 40 ticks. Do not exceed the MPU6050's
+            ability to keep up: 50 ms is a comfortable default.
+
+    config APP_ENV_PRINT_MS
+        int "Sensor status print interval (ms)"
+        range 0 10000
+        default 1000
+        help
+            How often the collection task prints one consolidated status
+            line with every sensor reading and its alert threshold.
+            0 disables the periodic line entirely (events such as
+            vibration and alert transitions are still logged).
+
+            This is the only periodic sensor output: the individual
+            sensors do not print their own lines, so the serial console
+            gets one line per interval instead of a burst per sensor.
+
+    config APP_MPU6050_VIB_THRESH_MG
+        int "Vibration threshold (mg above 1g)"
+        range 20 4000
+        default 300
+        help
+            The magnitude of the acceleration vector minus 1g, in
+            milli-g (1000 mg = 1g). A light tap on the desk is roughly
+            300-2000 mg. Raise it to ~800 if the board sits next to a fan
+            or an air conditioner; lower it to ~100 for tamper detection.
+
+    config APP_MPU6050_VIB_CONSEC
+        int "Vibration debounce (consecutive samples)"
+        range 1 20
+        default 2
+        help
+            How many consecutive over-threshold samples are needed before
+            a vibration is reported. Filters out single-sample spikes.
+
+    config APP_MPU6050_VIB_COOLDOWN_MS
+        int "Vibration report cooldown (ms)"
+        range 0 60000
+        default 3000
+        help
+            After reporting a vibration, ignore further ones for this long.
+            Without it, one shake would trigger a burst of HTTP POSTs.
+
+    config APP_ALERT_TEMP_MAX
+        int "High temperature alert (degC)"
+        range 0 100
+        default 35
+
+    config APP_ALERT_TEMP_MIN
+        int "Low temperature alert (degC)"
+        range -40 40
+        default 5
+
+    config APP_ALERT_HUM_MAX
+        int "High humidity alert (%)"
+        range 0 100
+        default 85
+
+    config APP_ALERT_HUM_MIN
+        int "Low humidity alert (%)"
+        range 0 100
+        default 20
+
+    config APP_ALERT_DIST_MIN
+        int "Close distance alert (cm)"
+        range 0 400
+        default 30
+        help
+            A measured distance below this raises the "dist_near" alert,
+            e.g. for a doorway monitor. Set 0 to disable.
+
+    comment "---- Controllable lamp ----"
+
+    config APP_LAMP_GPIO
+        int "Lamp GPIO (onboard WS2812 RGB LED)"
+        range 0 48
+        default 48
+        help
+            The lamp is the onboard WS2812 addressable RGB LED: ON shows
+            green, OFF turns it off. In the REST backend it is driven by
+            polling the command path; in the AWS backend by publishing
+            ON/OFF to <base>/lamp/set.
+
+    comment "---- OTA (power-on version check) ----"
+
+    config APP_OTA_CHECK_URL
+        string "OTA version-check URL (empty = disabled)"
+        default ""
+        help
+            Must point at an HTTPS URL that returns the JSON manifest
+            {"version":"1.0.1","url":"https://.../aws_mqtt.bin"} - for
+            example a GitHub raw link. Leave it empty to keep the power-on
+            check off; the log then simply reports that checking is disabled.
+
+            Rules applied at boot:
+              server version > this firmware -> download and update, reboot
+              server version = this firmware -> nothing to do
+              server version < this firmware -> ignored, the running image
+                                               is kept (no downgrade)
+            The local version compared against is APP_FW_VERSION, built from
+            APP_FW_VERSION in the project-root version.cmake (the single
+            source of truth; it also sets the image header App version).
+
+    config APP_OTA_CHECK_ON_BOOT
+        bool "Check the OTA version on every power-on"
+        default y
+        help
+            Powers on -> connect WiFi -> query APP_OTA_CHECK_URL -> upgrade
+            if (and only if) the announced version is higher.
+
+    config APP_OTA_TIMEOUT_S
+        int "OTA HTTP timeout (s)"
+        range 10 300
+        default 60
+        help
+            Socket/read timeout for both the manifest request and the image
+            download. A 1 MB image over a slow link can take a while, so do
+            not set this too low.
+
+endmenu

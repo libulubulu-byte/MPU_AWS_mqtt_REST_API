@@ -1,0 +1,192 @@
+# AWS_mqtt 默认配置（新建 sdkconfig 时生效）
+CONFIG_IDF_TARGET="esp32s3"
+
+# 板子：ESP32-S3-WROOM-1 N16R8（16MB flash）
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# 日志
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# ⚠️ 临时排障：放开编译期日志上限到 DEBUG。
+#
+# 只改 build 目录下的 sdkconfig / 只调 esp_log_level_set() 都**没用**：
+# esp_log.h 的 ESP_LOGD 里带 `#if CONFIG_LOG_MAXIMUM_LEVEL >= 4`，
+# 上限是 INFO(3) 时这些行在**编译期就被整体删掉**了，运行时再怎么设级别
+# 都打不出一个字。所以必须在这里放开，然后全量重建（不是增量编译）。
++#
++# 默认 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y 会把 LEVEL 钉在 INFO，
++# 必须先把它关掉，LEVEL_DEBUG 才会生效。
++CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=n
++CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
++# mbedtls 的错误码文字解释（ssl_msg.c 里那个 #if）也依赖这个上限
++CONFIG_MBEDTLS_DEBUG=y
++CONFIG_MBEDTLS_DEBUG_LEVEL=1
+
+# HTTP Server：手机浏览器的请求头经常超过默认 512 字节，
+# 太小会在 POST /save 时直接回 431 "Header fields are too long"
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+CONFIG_HTTPD_MAX_URI_LEN=2048
+
+# ESP-MQTT：AWS IoT Core 用 MQTT 3.1.1 over TLS(8883)
+CONFIG_MQTT_PROTOCOL_311=y
+CONFIG_MQTT_TRANSPORT_SSL=y
+CONFIG_MQTT_TRANSPORT_WEBSOCKET=n
+CONFIG_MQTT_TRANSPORT_WEBSOCKET_SECURE=n
+# TLS 需要足够大的收发缓冲；AWS 的服务器证书链也比自签的长。
+# ⚠️ 这里必须与下面"MOTT 接收缓冲"一节的 CONFIG_MQTT_BUFFER_SIZE 一致：
+# Kconfig 按最后一次赋值生效，外面若留个 2048 会被静默盖掉，
+# 造成"删掉 sdkconfig 重新生成后行为突变"这类极难查的问题。
+CONFIG_MQTT_BUFFER_SIZE=8192
+# AWS IoT 的服务器证书链（Amazon RSA 2048 中间 CA）单个 TLS record 约 5007 字节，
+# 默认 4096 会让 mbedtls_ssl_fetch_input() 报 -0x7100
+# (requesting more data than fits)，表现为握手在 parse certificate 阶段失败。
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=6144
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+# 证书从 NVS 读的是 PEM 字符串，走 mbedTLS 的 PEM 解析
+# 注意：证书包（根 CA bundle）必须打开 —— OTA 的版本清单和镜像下载走
+# esp_http_client/esp_https_ota，用 crt_bundle_attach=esp_crt_bundle_attach
+# 校验 HTTPS 服务器（GitHub raw、S3 等），关掉就没有可用的根证书。
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_PEM_PARSE_C=y
+CONFIG_MBEDTLS_PEM_WRITE_C=n
+# 系统时间用 SNTP 对准（TLS 校验证书有效期需要），
+# 也可以改成 CONFIG_ESP_TLS_INSECURE + .certificate 跳过时间校验
+CONFIG_LWIP_SNTP_MAX_SERVERS=1
+
+# TLS 排障开关：打开后 mbedtls 会逐步打印握手过程（ClientHello /
+# 证书校验 / ALPN 协商 / 密钥交换），握手失败时能直接看出断在哪一步。
+# 平时关掉 —— 握手一次会刷出几十行日志，且会明显拖慢启动。
+#
+# 排查 TLS 问题时改成：
+#   CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=n
+#   CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+#   CONFIG_MBEDTLS_DEBUG=y
+#   CONFIG_MBEDTLS_DEBUG_LEVEL=4   (1=Warn 2=Info 3=Debug 4=Verbose)
+#
+# 注意 LOG_MAXIMUM_EQUALS_DEFAULT 默认 y，会把 LOG_MAXIMUM_LEVEL 钉在
+# INFO(3) —— 那样上不来 DEBUG，mbedtls_print_error_msg 里那个 #if 为假，
+# 拿不到类似 "(FFFF8F00): SSL - Bad input parameters to function" 的文字解释。只有错误码是查不出原因的。
+#
+# 现已关闭（握手问题已定位并修复，见上面 IN_CONTENT_LEN 的说明）。
+CONFIG_MBEDTLS_DEBUG=n
+
+# 后端选择（REST / AWS）、REST 服务器地址/端口/路径、上报周期都不在这里 ——
+# 它们是 main/app_config.h 里的宏，改代码即改配置。
+# 固件版本号也不在这里，唯一来源是工程根目录的 version.cmake。
+# 本文件只保留 menuconfig 里能调的量。
+
+# ---- 上电版本检查（OTA）----
+# 版本清单 URL。留空 = 关闭上电检查（日志会打 "no OTA URL configured"）。
+# 注意：本行要与 sdkconfig 里的同名项保持一致 —— sdkconfig 已存在时 idf.py 不读
+# 本文件，只有删掉 sdkconfig 重新生成时才会按这里取值，不一致会导致重生成后
+# OTA 静默失效。生产环境建议改成 HTTPS（如 GitHub raw / 自己的静态站点）。
+# 清单内容：{"version":"1.0.1","url":"https://.../aws_mqtt_rest_api.bin"}
+# 本地版本号是工程根目录 version.cmake 里的 APP_FW_VERSION（唯一来源，
+# 同时决定镜像头的 App version）。
+CONFIG_APP_OTA_CHECK_URL="http://192.168.0.101:8081/ota.json"
+CONFIG_APP_OTA_CHECK_ON_BOOT=y
+CONFIG_APP_OTA_TIMEOUT_S=60
+
+# ---- SNTP 校时（离线闹钟的准确度全靠它）----
+# 3 个服务器互为冗余，列表写在 main/app_config.h 的 APP_SNTP_SERVER_*。
+# 注意：这里必须是 3，和 app_config.h 里 ESP_SNTP_SERVER_LIST() 的元素个数
+# 一致 —— SNTP_MAX_SERVERS 是编译期数组长度，数少了会直接编译报错
+# ("excess elements in array initializer")。
+CONFIG_LWIP_SNTP_MAX_SERVERS=3
+
+# ---- MQTT 接收缓冲（Shadow documents 必须放得下）----
+# Shadow 的 .../shadow/update/documents 报文含 metadata，实测 3~6 KB。
+# 缓冲小于报文时 esp-mqtt 会**直接断开 TLS 连接**（mqtt_client.c:1288
+# "message is too big, insufficient buffer size" -> goto err），
+# 表现为每 10s 重连一次的 transport error，极易误判成网络或证书问题。
+CONFIG_MQTT_USE_CUSTOM_CONFIG=y
+CONFIG_MQTT_BUFFER_SIZE=8192
+CONFIG_MQTT_TASK_STACK_SIZE=6144
+
+# ---- TLS 记录层：周期性断连的**真正根因**（2026-09-14 定位）----
+#
+# ⚠️⚠️ 这个值是整套代码里第二个最要命的数字（第一个是 .buffer.size）。
+#
+# IN_CONTENT_LEN = 允许解出的**单条 TLS 记录的明文长度上限**。配小了，
+# 对端发来一条更大的记录时，mbedtls 在解密**之后**才校验
+# （ssl_msg.c:4160 `if (rec->data_len > MBEDTLS_SSL_IN_CONTENT_LEN)`）
+# 并直接判死：
+#   W mbedtls: ssl_msg.c:4161 bad message length
+#   W mbedtls: ssl_msg.c:4220 ssl_get_next_record() returned -0x7200
+#   E esp-tls-mbedtls: read error :-0x7200  (MBEDTLS_ERR_SSL_INVALID_RECORD)
+#   E transport_base: esp_tls_conn_read error, errno=Connection already in progress
+#   E mqtt_client: transport_read() error: errno=119 (EINPROGRESS)
+# 然后 esp-mqtt 就 abort_connection。
+#
+# 【为什么这个 bug 这么难查】它的症状会把人一路带偏：
+#   - 断连周期**严格跟随上报间隔**（上报 10s -> 存活 11~12s），
+#     看起来像"我们的 publish 触发的"，于是去查 PUBACK / QoS；
+#   - 每次断在**收到 accepted 之后约 0.5~2s**，看起来像回调太慢；
+#   - 报错里混着 errno=119 EINPROGRESS，看起来像 SSL 重入/并发问题；
+#   - 报文是**单包**（不分片），于是排除了缓冲区大小。
+#   实测把上报间隔改成 60s，存活时间就变成 61s —— 这条线索最关键：
+#   周期跟着业务周期走，说明是"每次上报后 broker 推回来的某个东西"。
+#
+# 【真实数字】AWS 在应答时会推两条：
+#   update/accepted   ~3100 字节 —— 小于 6144，正常
+#   update/documents  ~6248 字节 —— **超出 6144 只有 100 多字节**，必死
+# 抓到的 TLS 进站记录分布印证了这一点：最大的那条 msglen=6375
+# （密文，明文约 6248），其余最大是握手期的 5007（服务器证书链）。
+# 6144 这个值恰好卡在 5007 和 6248 之间，所以**握手永远成功、上报必断**，
+# 表现得像是"连得上但用不了"，极具迷惑性。
+#
+# 取值依据：TLS 记录明文上限是 2^14 = 16384（RFC 8446），所以取
+# 16384 就是"永远不可能超"的保险值。代价是 mbedtls 的输入缓冲多占
+# 约 10 KB RAM（ESP32-S3 有 512 KB SRAM，无所谓）。
+# 若舍不得 RAM，取 8192 也够（AWS 单条记录实测上限 6375）。
+#
+# ⚠️ 改这里必须同时改示例根目录的 sdkconfig —— 见文件末尾的说明。
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=8192
+
+# 事件队列深度。**必须 > 1**，这是 CONFIG_MQTT_USE_CUSTOM_CONFIG 打开后
+# 最容易踩的坑：值为 1 时 mqtt_config.h:105-108 让 MQTT_EVENT_QUEUE_SIZE == 1，
+# 于是 mqtt_client.c:1025 / 1548-1562 / 872 三处全部退化：
+#   - esp_mqtt_dispatch_event() 走 esp_event_post_to(..., portMAX_DELAY)
+#     + esp_event_loop_run()，**同步**在我们的上下文里跑用户回调；
+#   - max_poll_timeout() 恒返回完整超时（默认 MQTT_POLL_READ_TIMEOUT_MS=1000），
+#     mqtt 任务不再穿插去 drain 事件队列。
+# 后果不是断连，而是**回调站在收包关键路径上**：回调里多做一点
+# （解析 JSON、打日志、回发 publish），后面的报文读取就被推迟，
+# 表现为上报/下发吞吐抖动。改成 10 之后回调由事件循环异步派发，
+# 且 queued_events > 0 时 mqtt 任务每 10ms 就回来跑一次事件循环。
+CONFIG_MQTT_EVENT_QUEUE_SIZE=10
+# 重同步间隔。片内 RC 慢时钟温漂较大（实测才知道具体量级），
+# 默认 1 小时会让误差累积到数秒；15 分钟一次把误差压在 1s 内，网络开销可忽略。
+CONFIG_LWIP_SNTP_UPDATE_DELAY=900000
+
+# 主题前缀：必须以 Thing 名（aws_certs.h 里的 AWS_IOT_THING）开头，
+# 否则 IoT 策略里常见的 "thing/*" 通配匹配不上，订阅/发布会被静默丢弃。
+# 端点/端口/Thing 名不在这里，它们在 main/aws_certs.h 里跟证书放一起。
+CONFIG_APP_AWS_BASE_TOPIC="ESP32S3/esp32s3-sht30"
+
+# ===================================================================
+# ⚠️⚠️ 改本文件之后**必须**同步改示例根目录的 sdkconfig，否则白改
+# ===================================================================
+# ESP-IDF 只在 sdkconfig **不存在**时才拿 sdkconfig.defaults 去生成它。
+# 一旦根目录已有 sdkconfig（本示例是随代码提交的），后续对
+# sdkconfig.defaults 的任何修改都**不会**自动回灌。
+#
+# 这个坑在 2026-09-14 浪费了好几个小时，值得单独记一笔：
+# 当时明明在 sdkconfig.defaults 里把 MBEDTLS_SSL_IN_CONTENT_LEN 改成了
+# 16384（注释还写着"提到 16384 后不再出现 INVALID_RECORD"），
+# 但根目录 sdkconfig 里仍是 6144 —— 于是固件实际按 6144 编译，
+# 周期性断连照旧，让人以为"这个方向已经试过了、不是原因"，
+# 从而把排查引向了回调/分片/PUBACK 等一堆错误方向。
+#
+# 教训：怀疑某个 CONFIG 没生效时，别看 defaults，**直接查编译产物**：
+#     Select-String -Path build\config\sdkconfig.h -Pattern "SSL_IN_CONTENT_LEN"
+# sdkconfig.h 是最后的真相，里面没有就说明压根没编进去。
+#
+# 两个改法（推荐前者）：
+#   1. 用 idf.py menuconfig 改 —— 它会直接写 sdkconfig，不会漏；
+#   2. 手工同时改 sdkconfig 和 sdkconfig.defaults，改完务必用上面的
+#      Select-String 验一遍 build/config/sdkconfig.h。
+# 千万别只改 defaults，也别指望删掉 sdkconfig 重新生成 ——
+# 那会把 sdkconfig 里所有手工调过的项一起丢掉（本文件并没有涵盖全部）。
