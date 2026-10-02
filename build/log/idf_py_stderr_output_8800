@@ -1,9 +1,0 @@
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:17: warning: ignoring malformed line '+#'
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:18: warning: ignoring malformed line '+# Ĭ�� CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y ��� LEVEL ���� INFO��'
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:19: warning: ignoring malformed line '+# �����Ȱ����ص��LEVEL_DEBUG �Ż���Ч��'
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:20: warning: ignoring malformed line '+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=n'
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:21: warning: ignoring malformed line '+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y'
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:22: warning: ignoring malformed line '+# mbedtls �Ĵ��������ֽ��ͣ�ssl_msg.c ���Ǹ� #if��Ҳ�����������'
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:23: warning: ignoring malformed line '+CONFIG_MBEDTLS_DEBUG=y'
-C:\Users\DELL\AppData\Local\Temp\kconfgen_tmp45jbzwdm:24: warning: ignoring malformed line '+CONFIG_MBEDTLS_DEBUG_LEVEL=1'
-fatal: not a git repository: D:/ESP32-IDF/v5.3.2/esp-idf/components/openthread/openthread/../../../.git/modules/components/openthread/openthread

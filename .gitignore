@@ -1,0 +1,30 @@
+# ESP-IDF
+#   sdkconfig / sdkconfig.old 是从 menuconfig 生成的、与本机绑定的结果，
+#   仓库里只保留 sdkconfig.defaults 作为唯一事实来源。
+build/
+build_*/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+log/
+*.log
+
+# editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# python
+__pycache__/
+*.pyc
+
+# secrets - never commit certificates or private keys
+secret.h
+*.pem
+*.pem.crt
+*.key
+
+# local mock-server data
+rest_mock_server/telemetry.db
