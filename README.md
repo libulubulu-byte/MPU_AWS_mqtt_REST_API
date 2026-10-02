@@ -301,3 +301,4 @@ aws iot-data publish --topic 'esp32s3-sht30/lamp/set' --payload 'ON' \
 | 想换 WiFi / 端点 / Thing 名 | 长按 BOOT 键 3 秒重新配网 |
 | 想换证书 | 改 `main/aws_certs.h` 后重新 `idf.py flash`（配网不动证书） |
 # MPU_AWS_mqtt_REST_API
+# MPU_AWS_mqtt_REST_API
