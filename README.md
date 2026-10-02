@@ -40,24 +40,60 @@ PIR     (GPIO) ─┘                     events ─▶ event bits ─▶ immedi
 
 ## Hardware
 
-| Item | Detail |
-|---|---|
-| MCU / board | **ESP32-S3-WROOM-1 N16R8** — 16 MB flash, **no PSRAM** |
-| IMU | **MPU6050**, I²C0, address `0x68` (`0x69` selectable), **SDA 15 / SCL 16**, accelerometer range selectable, gyro ±250…2000 dps, raw six-axis + temperature (no DMP / no attitude fusion) |
-| Temperature / humidity | **SHT30**, I²C1, address `0x44`, **SDA 12 / SCL 13**, non-clock-stretching command `0x2400` with CRC-8 check |
-| Temperature / humidity | **DHT22**, single-wire **GPIO4**, sampled every 2 s |
-| Distance | **HC-SR04**, **TRIG 5 / ECHO 6**, 30 ms timeout |
-| Motion | **PIR**, **GPIO7**, hold time 30 s (optionally drives the lamp) |
-| Status / lamp | **WS2812 RGB**, **GPIO48** — green when on, off otherwise |
-| Button | **BOOT / GPIO0** — hold 3 s to clear credentials and re-enter provisioning |
+### Bill of materials
+
+| Qty | Item | Bus / address | Notes |
+|---|---|---|---|
+| 1 | **ESP32-S3-WROOM-1 N16R8** module or dev board | — | 16 MB flash (`CONFIG_ESPTOOLPY_FLASHSIZE_16MB`); this firmware does not enable PSRAM |
+| 1 | **MPU6050** six-axis IMU breakout (e.g. GY-521) | I²C0, `0x68` (`0x69` optional) | Raw accelerometer + gyroscope + temperature; **no DMP, no attitude fusion**. Accel range configurable, default ±2 g (finest resolution, which is what the vibration detector needs); gyro ±250…2000 dps |
+| 1 | **SHT30** temperature / humidity breakout | I²C1, `0x44` | Non-clock-stretching measurement command `0x2400`, CRC-8 checked |
+| 1 | **DHT22 / AM2302** temperature / humidity sensor | 1-wire, sampled every 2 s | |
+| 1 | **HC-SR04** ultrasonic distance sensor | TRIG + ECHO | 30 ms echo timeout (≈5 m) |
+| 1 | **PIR** motion module — HC-SR501 or AM312 | 1 digital input | Presence hold time 30 s; can switch the lamp |
+| — | On-board **WS2812** addressable RGB LED | `lamp` output | Green = ON, off = OFF |
+| — | On-board **BOOT** button | re-provision input | Hold 3 s to erase Wi-Fi credentials and re-enter provisioning |
+| 1 | **1 kΩ + 2 kΩ** resistors | — | Divider on the HC-SR04 `ECHO` line (5 V → 3.3 V) |
+| 1 | **4.7 kΩ** resistor | — | DHT22 pull-up — **only for a bare 4-pin sensor**; 3-pin modules already carry one |
+| 1 | **5 V supply** (or the board's 5 V/VBUS pin) | — | The HC-SR04 needs 5 V; an HC-SR501 PIR also expects 5 V |
+
+### Wiring / pin map
+
+Defaults compiled from `main/Kconfig.projbuild` (menuconfig → *AWS IoT (SHT30)
+Configuration*). Every one of them is configurable there.
+
+| Peripheral | Signal | GPIO | Notes |
+|---|---|---|---|
+| MPU6050 | SDA | **15** | Its own I²C bus (`I2C_NUM_0`) |
+| MPU6050 | SCL | **16** | |
+| MPU6050 | AD0 | — | Low → `0x68` (default), high → `0x69` |
+| SHT30 | SDA | **12** | `I2C_NUM_1`, 100 kHz |
+| SHT30 | SCL | **13** | |
+| SHT30 | ADDR | — | Low / floating → `0x44` |
+| DHT22 | DATA | **4** | Single-wire; the driver also enables the internal pull-up |
+| HC-SR04 | TRIG | **5** | 3.3 V logic is fine |
+| HC-SR04 | ECHO | **6** | **5 V output — divide it down** |
+| PIR | OUT | **7** | Active high |
+| WS2812 lamp | DIN | **48** | On-board LED |
+| Re-provision button | — | **0** | On-board BOOT, active low, internal pull-up |
+| All sensor modules | VCC | **3V3** | SHT30 / MPU6050 / DHT22 are 3.3 V parts — never power them from 5 V |
+| All modules | GND | **GND** | Common ground with the board |
 
 ### Wiring notes
 
-* **HC-SR04 `ECHO` is a 5 V output** — use a divider (or level shifter) before
-  the GPIO.
+* **HC-SR04 `ECHO` is a 5 V output** — use a divider (or a level shifter) before
+  the GPIO, otherwise the pin is damaged. `TRIG` is fine at 3.3 V, but the
+  sensor itself still wants a **5 V supply**.
+* **PIR modules differ**: HC-SR501 needs 5 V but its output is 3.3 V-compatible;
+  AM312 runs from 3.3 V. Either way the output goes straight to the GPIO.
 * **MPU6050 and SHT30 are on separate I²C buses on purpose** (I²C0 and I²C1):
   they never contend, and the MPU6050 driver owns its own bus object.
-* **Avoid GPIO41/42** (USB D±) when picking I²C pins.
+* **Never put I²C on GPIO41/42.** On the ESP32-S3 those are the USB D-/D+ lines
+  and this project enables the USB Serial/JTAG secondary console; a bus wired
+  there works until USB becomes active and then starts NACKing (symptom: both
+  `mpu6050` and `SHT30` drop to `--`, plus `i2c.master: unexpected nack` spam).
+  GPIO15/16 are free here — use those.
+* GPIO0 (BOOT) is the on-board button and is also a strapping pin; the
+  re-provision handler only uses it as an input with the internal pull-up.
 
 ---
 
@@ -283,6 +319,8 @@ idf.py -p COM10 flash monitor
 | Disconnects under load | keep the MQTT buffers at 8192 (`CONFIG_MQTT_BUFFER_SIZE`); smaller buffers push esp-mqtt into a path that drops messages |
 | Shadow `documents` truncated | the 10 KB reassembly buffer exists for the 3–6 KB multi-fragment documents |
 | Build fails on `partitions.csv` | the file must be ASCII-only |
+| Build fails at configure with `The current CMakeCache.txt directory ... is different than the directory ... where CMakeCache.txt was created` / `The source ... does not match the source ... used to generate cache` | A CMake build tree was copied from another machine (or another ESP-IDF path). `CMakeCache.txt` embeds absolute paths, so it can never be reused: **delete the whole `build/` directory** and rebuild |
+| `idf.py fullclean` refuses: *"doesn't seem to be a CMake build directory"* | The same corrupted cache — fullclean will not delete a directory it cannot recognise. Remove `build/` (and any `build_flash/`, `build_win/`) by hand, then rebuild |
 | No cloud, but the alarm still rings | by design — the alarm engine is independent of networking |
 
 ---
@@ -336,17 +374,28 @@ README.zh-CN.md  legacy Chinese README (describes an older, smaller version)
 
 ---
 
-## ⚠️ Security notice before publishing
+## ⚠️ Certificate handling (read before flashing)
 
-* `main/aws_certs.h` in this working copy contains a **real AWS IoT endpoint,
-  device certificate and private key**. A leaked private key means someone else
-  can impersonate the device on your AWS account.
-* Before pushing to a public repository: replace the PEM blocks with
-  `REPLACE_WITH_...` placeholders (ship an `aws_certs.h.example`), add
-  `aws_certs.h` to `.gitignore`, and **rotate the certificate in AWS IoT Core** —
-  anything that was ever committed must be treated as compromised.
-* `.gitignore` in this repository already excludes `*.pem`, `*.key`, build
-  directories and the local mock-server database.
+* `main/aws_certs.h` is **tracked by git and ships placeholders only** — the
+  endpoint, Thing name and all three PEM blocks read `REPLACE_WITH_...`. The
+  firmware refuses to start the AWS backend while that is the case
+  (`aws_certs_configured()`), so a fresh clone still **builds** and runs on the
+  REST backend out of the box.
+* To use AWS: paste your endpoint, Thing name, Amazon Root CA 1, device
+  certificate and private key into that file, then rebuild. Keep the real values
+  out of git with
+
+  ```bash
+  git update-index --skip-worktree main/aws_certs.h
+  ```
+
+* A private key that has ever been committed must be treated as compromised:
+  **rotate it in AWS IoT Core** (create a new certificate for the Thing, attach
+  the same policy, deactivate and delete the old one). Rewriting the file does
+  not undo a leak — the key stays in the git history.
+* `.gitignore` already excludes `*.pem`, `*.key`, `secret.h`, build directories
+  and the local mock-server database, so copying the raw downloaded files into
+  the tree is safe from casual commits.
 
 ---
 
